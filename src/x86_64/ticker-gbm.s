@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- * MONTE CARLO ENGINE: X86_64 HOST ORCHESTRATOR (DYNAMIC TAIL EXTRACTION)
+ * TICKER GBM ENGINE: X86_64 HOST ORCHESTRATOR (DYNAMIC TAIL EXTRACTION)
  * ============================================================================
  */
 
@@ -14,9 +14,11 @@
     fmt_prob:       .ascii "DIRECTIONAL ANALYSIS:\n"
                     .ascii ">> Probability of Net RISE  (S_T > S_0): %.2f%%\n"
                     .asciz ">> Likelihood of Net DROP   (S_T < S_0): %.2f%%\n"
-    err_args:       .asciz "Usage: ./monte_carlo <data.ticker> 0 <iters> <horizon>\n"
-    cubin_path:     .asciz "build/x86_64/monte_carlo.cubin"
-    kernel_name:    .asciz "monte_carlo_kernel"
+    err_args:       .asciz "Usage: ./ticker-gbm <data.ticker> 0 <iters> <horizon>\n"
+    
+    # Resolved via the assembler include path (-I) matching the $(NAME) standard
+    cubin_path:     .asciz "ticker_gbm.cubin"
+    kernel_name:    .asciz "ticker_gbm"
 
     .align 8
     .L_hundred:     .double 100.0
@@ -261,10 +263,6 @@ _start:
 
     leaq    fmt_prices(%rip), %rdi
     movsd   p_start(%rip), %xmm0        # Explicitly reload double float price
-    
-    # Calculate expected price curve path
-leaq    fmt_prices(%rip), %rdi
-    movsd   p_start(%rip), %xmm0        # Parameter 1: Current Price (maps to %xmm0)
     
     # Calculate expected price curve path
     movsd   p_drift(%rip), %xmm1        # Temporarily use %xmm1 to store drift
