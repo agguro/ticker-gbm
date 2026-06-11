@@ -5,44 +5,64 @@ echo "============================================================"
 echo "PRODUCTION PORTFOLIO INTEGRATION SUITE (90d / 1d)"
 echo "============================================================"
 
-# Ensure output structures exist
-mkdir -p data
-mkdir -p bin/x86_64
+# Kogelvrije project-root detectie
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Verify required executables are present
-for binary in fetch_ticker gbm_ticker; do
-    if [ ! -f "./bin/x86_64/$binary" ]; then
-        echo ">>> ERROR: ./bin/x86_64/$binary not found. Please compile your binaries first."
-        exit 1
-    fi
-done
+# Build-modus
+MODE="debug"
 
-# Define your target portfolio "chickens"
-TICKERS=("MAIN" "O" "PSEC" "ARCC" "JEQP")
+# Absolute paden
+BASE_BIN_DIR="${PROJECT_ROOT}/bin/${MODE}/x86_64"
+DATA_DIR="${PROJECT_ROOT}/data"
 
-echo "Starting data ingestion and simulation pipeline..."
+# Zorg dat de centrale data-map in de project-root bestaat
+mkdir -p "$DATA_DIR"
+
+# Volledige paden naar de executables
+FETCH_TICKER_BIN="${BASE_BIN_DIR}/fetch-ticker/fetch-ticker"
+TICKER_GBM_BIN="${BASE_BIN_DIR}/ticker-gbm/ticker-gbm"
+
+# Verificatie van de binaries
+if [ ! -f "$FETCH_TICKER_BIN" ]; then
+    echo ">>> ERROR: $FETCH_TICKER_BIN not found. Please compile your project first."
+    exit 1
+fi
+
+if [ ! -f "$TICKER_GBM_BIN" ]; then
+    echo ">>> ERROR: $TICKER_GBM_BIN not found. Please compile your project first."
+    exit 1
+fi
+
+# Target portfolio "chickens"
+TICKERS=("MAIN" "O" "PSEC" "ARCC" "JEPQ")
+
+echo "Starting data ingestion and simulation pipeline [Mode: ${MODE}]..."
 echo "------------------------------------------------------------"
 
 for TICKER in "${TICKERS[@]}"
 do
     echo -e "\n[PIPELINE] Processing: $TICKER"
     
-    # 1. Network Fetch Phase (using your standard 3-arg syntax)
+    # 1. Network Fetch Phase
     echo "  >> Fetching 90 days of historical data..."
-    ./bin/x86_64/fetch_ticker "$TICKER" "90d" "1d"
     
-    # Check if fetch_ticker placed the output file correctly
-    # If fetch_ticker outputs to a fixed path like data/$TICKER.ticker, we verify it here:
-    TARGET_FILE="data/${TICKER}.ticker"
+    # Onthoud waar we stonden, spring naar de centrale data-map en voer de fetch uit
+    pushd "$DATA_DIR" > /dev/null
+    "$FETCH_TICKER_BIN" "$TICKER" "90d" "1d"
+    popd > /dev/null # Spring direct weer terug naar de test-map
+    
+    # Definieer het verwachte bestand in de centrale map
+    TARGET_FILE="${DATA_DIR}/${TICKER}.ticker"
     
     if [ ! -s "$TARGET_FILE" ]; then
         echo "  >> ERROR: Ingestion failed. $TARGET_FILE is empty or missing."
         exit 1
     fi
     
-    # 2. GPU Simulation Phase (30-Day Forecast Horizon, 5M Trajectories)
+    # 2. GPU Simulation Phase
     echo "  >> Launching GPU Monte Carlo (30-day horizon, 5,000,000 paths)..."
-    ./bin/x86_64/monte_carlo "$TARGET_FILE" 0 5000000 30
+    "$TICKER_GBM_BIN" "$TARGET_FILE" 0 5000000 30
     
     echo "------------------------------------------------------------"
 done
