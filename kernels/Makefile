@@ -1,26 +1,25 @@
 # ==============================================================================
-# ASM-LINUX-FRAMEWORK: SUBROOT LAYER ORCHESTRATOR (Kernels Root)
+# ASM-LINUX-FRAMEWORK: SUBROOT LAYER ORCHESTRATOR (Kernels Layer)
 # ==============================================================================
 
-# 1. DYNAMIC DISCOVERY
-# Zoekt naar alle submappen binnen kernels die een Makefile bevatten
-SUBDIRS := $(patsubst %/,%,$(dir $(shell find . -mindepth 2 -maxdepth 2 -name Makefile)))
-
-# Zorg dat de PARENTROOT bekend is mochten we hier direct 'make' aanroepen
-ifndef PARENTROOT
-    export PARENTROOT := $(CURDIR)/../
+ifndef LAUNCH_ROOT
+    export LAUNCH_ROOT := $(abspath $(CURDIR)/../)/
 endif
+
+# Kogelvrije discovery: we pakken alle mappen, maar filteren '.' en '..' expliciet uit!
+ALL_DIRS := $(patsubst %/,%,$(dir $(wildcard */Makefile)))
+SUBDIRS  := $(filter-out . ..,$(ALL_DIRS))
 
 all: debug
 
-# 2. EXECUTION LOOP
 debug release clean:
 	@for dir in $(SUBDIRS); do \
-		echo "=============================================================================="; \
-		echo "Entering Subroot Layer: ./kernels/$$dir -> Target: $@"; \
-		echo "=============================================================================="; \
-		$(MAKE) -C $$dir $@ || exit 1; \
+		if [ -d $$dir ] && [ -f $$dir/Makefile ]; then \
+			echo "=============================================================================="; \
+			echo "Entering Subroot Layer: ./kernels/$$dir -> Target: $@"; \
+			echo "=============================================================================="; \
+			$(MAKE) -C $$dir LAUNCH_ROOT=$(LAUNCH_ROOT) $@ || exit 1; \
+		fi \
 	done
 
 .PHONY: all debug release clean
-

@@ -1,5 +1,5 @@
 # ==============================================================================
-# ASM-LINUX-FRAMEWORK: UNIVERSELE ORCHESTRATOR (Root Makefile)
+# ASM-LINUX-FRAMEWORK: UNIVERSELE ORCHESTRATOR (Project Root)
 # ==============================================================================
 
 # 1. TOOLCHAIN DETECTION & VALIDATION
@@ -14,38 +14,41 @@ ifeq ($(NVDISASM),)
     $(error CRITICAL: 'nvdisasm' not found in $$PATH. Please install nvidia-cuda-toolkit!)
 endif
 
-# 2. DYNAMIC DISCOVERY & PARAMETERS
-SUBDIRS      := $(patsubst %/,%,$(dir $(shell find . -mindepth 2 -maxdepth 2 -name Makefile)))
-
-# We zetten de wet voor de absolute project root vast en exporteren deze direct!
-export PROJECT_ROOT := $(CURDIR)/
-
-ifndef PARENTROOT
-    export PARENTROOT := $(CURDIR)/
+# 2. LAUNCH CONTEXT DETECTIE
+# Als deze repo standalone wordt gebouwd, is DIT de launch root.
+# Als hij via asm-multiarch komt, hergebruiken we die reeds geëxporteerde root.
+ifndef LAUNCH_ROOT
+    export LAUNCH_ROOT := $(abspath $(CURDIR))/
 endif
 
-GLOBAL_BUILD := $(PROJECT_ROOT)build
-GLOBAL_BIN   := $(PROJECT_ROOT)bin
+# 3. ARCHITECTUUR LAGEN DEFINITIE
+# We dwingen de twee vaste hoofdlagen af. Dit elimineert elke kans op zelf-recursie.
+SUBDIRS      := kernels x86_64
+
+GLOBAL_BUILD := $(LAUNCH_ROOT)build
+GLOBAL_BIN   := $(LAUNCH_ROOT)bin
 
 all: debug
 
-# 3. DIRECT EXECUTION LOOP
-debug release clean test: directories
+# 4. DIRECT EXECUTION LOOP (Cascadeert strak omlaag naar de sub-orchestrators)
+debug release clean test install: directories
 	@for dir in $(SUBDIRS); do \
-		echo "=============================================================================="; \
-		echo "Entering Target Directory: $$dir -> Target: $@"; \
-		echo "=============================================================================="; \
-		$(MAKE) -C $$dir $@ || exit 1; \
+		if [ -d $$dir ] && [ -f $$dir/Makefile ]; then \
+			echo "=============================================================================="; \
+			echo "Entering Layer: $$dir -> Target: $@"; \
+			echo "=============================================================================="; \
+			$(MAKE) -C $$dir LAUNCH_ROOT=$(LAUNCH_ROOT) $@ || exit 1; \
+		fi \
 	done
 
-# 4. UTILITIES
+# 5. UTILITIES
 directories:
 	@mkdir -p $(GLOBAL_BUILD)
 	@mkdir -p $(GLOBAL_BIN)
 
 deep_clean:
-	@echo "Removing centralized build and binary directories..."
+	@echo "Removing centralized build and binary directories from $(LAUNCH_ROOT)..."
 	rm -rf $(GLOBAL_BUILD) $(GLOBAL_BIN)
 
-.PHONY: all debug release clean test directories deep_clean
+.PHONY: all debug release clean test install directories deep_clean
 
