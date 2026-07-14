@@ -218,7 +218,7 @@ _start:
     
     call    cuCtxSynchronize@PLT
 
-    # --- 9. FETCH RESULTS ---
+# --- 9. FETCH RESULTS ---
     leaq    h_hits_buf(%rip), %rdi
     movq    d_hits_ptr(%rip), %rsi
     movq    $4096, %rdx
@@ -229,10 +229,11 @@ _start:
     xorq    %rcx, %rcx
     leaq    h_hits_buf(%rip), %rdx
 .L_reduction:
-    cmpq    $1024, %rax
+    # Reduce only up to 256 blocks (or total blocks launched)
+    cmpq    $256, %rax            
     jge     .L_finalize_hits
-    movl    (%rdx,%rax,4), %esi
-    addq    %rsi, %rcx
+    movl    (%rdx,%rax,4), %esi   # Read 4-byte atomic results
+    addq    %rsi, %rcx            # Accumulate into 64-bit reg
     incq    %rax
     jmp     .L_reduction
 
