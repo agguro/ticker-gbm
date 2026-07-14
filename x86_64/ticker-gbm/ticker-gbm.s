@@ -266,27 +266,22 @@ _start:
     
     # Calculate expected price curve path
     movsd   p_drift(%rip), %xmm1        # Temporarily use %xmm1 to store drift
-    cvtsi2sd p_horizon(%rip), %xmm3
-    mulsd   %xmm3, %xmm1                # drift * horizon
-    mulsd   %xmm0, %xmm1                # (drift * horizon) * S_0
-    addsd   %xmm0, %xmm1                # Parameter 2: Expected Average (maps to %xmm1)
-    
-    movb    $2, %al                     # Tell printf to look at exactly 2 xmm registers
-    call    printf@PLT
-
-    # Calculate probability metrics
+# --- PROBABILITY CALCULATION ---
+    # 1. Calculate Rise Percentage in xmm0
     cvtsi2sd total_hits_acc(%rip), %xmm0
-    cvtsi2sd actual_paths(%rip), %xmm9  
-    divsd   %xmm9, %xmm0            
-    mulsd   .L_hundred(%rip), %xmm0 
-    
-    movsd   .L_hundred(%rip), %xmm1
-    minsd   %xmm1, %xmm0
-    subsd   %xmm0, %xmm1            
-    
-    leaq    fmt_prob(%rip), %rdi
-    movb    $2, %al
-    call    printf@PLT
+    cvtsi2sd actual_paths(%rip), %xmm1
+    divsd    %xmm1, %xmm0              # xmm0 = (hits / paths)
+    mulsd    .L_hundred(%rip), %xmm0    # xmm0 = Rise %
+
+    # 2. Calculate Drop Percentage in xmm1
+    # We need to compute (100.0 - xmm0) and store in xmm1
+    movsd    .L_hundred(%rip), %xmm1    # Load 100.0
+    subsd    %xmm0, %xmm1               # xmm1 = 100.0 - Rise % = Drop %
+
+    # 3. Print
+    leaq     fmt_prob(%rip), %rdi
+    movb     $2, %al                    # Tell printf to use xmm0 and xmm1
+    call     printf@PLT
 
     # Destroy hardware allocations
     movq    d_sums_ptr(%rip), %rdi
