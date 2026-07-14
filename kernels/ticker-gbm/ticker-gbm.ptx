@@ -1,6 +1,16 @@
 /*
  * ============================================================================
- * GPU KERNEL: BARE-METAL GEOMETRIC BROWNIAN MOTION (GBM) - PURE 64-BIT PRECISION
+ * GPU KERNEL: BARE-METAL GEOMETRIC BROWNIAN MOTION (GBM)
+ * ----------------------------------------------------------------------------
+ * Author      : Roberto Aguas Guerreiro (agguro)
+ * Date        : July 14, 2026
+ * Description : High-performance stochastic simulation engine using 
+ * pure 64-bit IEEE-754 precision. Performs path evolution based 
+ * on Geometric Brownian Motion (GBM) logic. Designed as a 
+ * stateless arithmetic engine; requires external host-side 
+ * validation for data depth and IPO thresholding.
+ *
+ * License     : Apache License 2.0
  * ============================================================================
  */
 
@@ -9,21 +19,40 @@
 .address_size 64
 
 .visible .entry ticker_gbm (
-    .param .u64 out_sums_ptr,       
-    .param .u64 out_hits_ptr,       
-    .param .u64 config_struct_ptr   
+    /* Pointer to VRAM: Stores cumulative sum of simulated asset prices */
+    .param .u64 out_sums_ptr,        
+    /* Pointer to VRAM: Stores frequency count of paths ending > S0 */
+    .param .u64 out_hits_ptr,        
+    /* Pointer to Host: 48-byte struct (drift, vol, S0, target, iters, horizon) */
+    .param .u64 config_struct_ptr    
 )
 {
     // --- REGISTER DEFINITIONS ---
-    .reg .b32    %r_tid, %r_ctaid, %r_ntid, %r_day_cnt, %r_hit_flag, %r_final_hits;
-    .reg .b64    %rd_state, %rd_tmp, %rd_off, %rd_sums_ptr, %rd_hits_ptr, %rd_mult, %rd_config;
-    .reg .b64    %rd_iters, %rd_horizon, %rd_day_cnt, %rd_total_hits, %rd_sim_cnt;
-    .reg .f64    %fd_sum_acc, %fd_S0, %fd_target, %fd_drift, %fd_vol, %fd_St;
-    .reg .f64    %fd_drift_term, %fd_u1, %fd_u2, %fd_z, %fd_temp;
-    .reg .f64    %fd_x, %fd_term, %fd_exp_x; // Taylor Series Registers
-    .reg .f32    %f_u1, %f_u2, %f_z, %f_temp;
-    .reg .pred   %p_sim_loop, %p_path_loop, %p_net_rise;
 
+    /* 32-bit registers for thread/block indexing, path progression, and status flags */
+    .reg .b32    %r_tid, %r_ctaid, %r_ntid, %r_day_cnt, %r_hit_flag, %r_final_hits;
+
+    /* 64-bit registers for state management, memory offsets, and pointers */
+    .reg .b64    %rd_state, %rd_tmp, %rd_off, %rd_sums_ptr, %rd_hits_ptr, %rd_mult, %rd_config;
+
+    /* 64-bit registers for iteration tracking, path limits, and counters */
+    .reg .b64    %rd_iters, %rd_horizon, %rd_day_cnt, %rd_total_hits, %rd_sim_cnt;
+
+    /* 64-bit double-precision registers for financial and Brownian motion calculations */
+    .reg .f64    %fd_sum_acc, %fd_S0, %fd_target, %fd_drift, %fd_vol, %fd_St;
+
+    /* 64-bit double-precision registers for intermediate drift and stochastic terms */
+    .reg .f64    %fd_drift_term, %fd_u1, %fd_u2, %fd_z, %fd_temp;
+
+    /* 64-bit double-precision registers for Taylor Series expansion of exponential function */
+    .reg .f64    %fd_x, %fd_term, %fd_exp_x; 
+
+    /* 32-bit single-precision registers for hardware-approximated random sequence generation */
+    .reg .f32    %f_u1, %f_u2, %f_z, %f_temp;
+
+    /* Predicate registers for loop control, conditional logic, and exit branching */
+    .reg .pred   %p_sim_loop, %p_path_loop, %p_net_rise;
+    
     // 1. UNPACK STRUCT ADDRESS PARAMETER
     ld.param.u64 %rd_config, [config_struct_ptr];
 
@@ -40,7 +69,8 @@
     mov.u32 %r_ctaid, %ctaid.x;
     mov.u32 %r_ntid, %ntid.x;
 
-    // 4. VOLATILITY NORMALIZATION
+    // 4. VOLATILITY & DRIFT NORMALIZATION
+    // Formula: Drift_Term = (μ - 0.5 * σ²)
     min.f64 %fd_vol, %fd_vol, 0.5;
     max.f64 %fd_drift, %fd_drift, -0.2;
     min.f64 %fd_drift, %fd_drift, 0.2;
@@ -85,7 +115,8 @@ L_SIM_LOOP:
     mov.u32 %r_hit_flag, 0;        
 
 L_PATH_WALK:
-    // --- RANDOM SEQUENCE GENERATION PASSES ---
+    // --- RANDOM SEQUENCE GENERATION (Box-Muller Transform) ---
+    // Maps uniform U(0,1) to Standard Normal N(0,1)
     add.u64 %rd_state, %rd_state, 0xDA442DE31966E40D;
     shl.b64 %rd_off, %rd_state, 13; xor.b64 %rd_state, %rd_state, %rd_off;
     shr.u64 %rd_off, %rd_state, 7;  xor.b64 %rd_state, %rd_state, %rd_off;
@@ -107,7 +138,7 @@ L_PATH_WALK:
     sub.f64 %fd_u2, %fd_u2, 1.0;
 
     cvt.rn.f32.f64 %f_u1, %fd_u1;
-    max.f32 %f_u1, %f_u1, 1.0e-7;       
+    max.f32 %f_u1, %f_u1, 1.0e-7;        
     lg2.approx.f32 %f_temp, %f_u1;
     mul.f32 %f_temp, %f_temp, -1.38629436; 
     sqrt.approx.f32 %f_temp, %f_temp;
@@ -119,37 +150,32 @@ L_PATH_WALK:
     cvt.f64.f32 %fd_z, %f_z;
 
     // --- PURE 64-BIT IEEE-754 PRICE EVOLUTION STEP ---
-    // %fd_x = drift_term + vol * z
+    // GBM Formula: S_t = S_prev * exp(drift_term + vol * z)
     fma.rn.f64 %fd_x, %fd_vol, %fd_z, %fd_drift_term;
 
     // Native High-Precision Taylor Series Approximation for exp(x)
-    // exp(x) = 1 + x + x^2/2! + x^3/3! + x^4/4! + x^5/5!
+    // exp(x) ≈ 1 + x + x²/2! + x³/3! + x⁴/4! + x⁵/5!
     mov.f64 %fd_exp_x, 1.0;
     
-    // Term 1: x
-    add.f64 %fd_exp_x, %fd_exp_x, %fd_x;
+    add.f64 %fd_exp_x, %fd_exp_x, %fd_x;          // + x
     
-    // Term 2: x^2 / 2
-    mul.f64 %fd_term, %fd_x, %fd_x;
+    mul.f64 %fd_term, %fd_x, %fd_x;               // + x² / 2
     mul.f64 %fd_term, %fd_term, 0.5;
     add.f64 %fd_exp_x, %fd_exp_x, %fd_term;
     
-    // Term 3: x^3 / 6
-    mul.f64 %fd_term, %fd_term, %fd_x;
+    mul.f64 %fd_term, %fd_term, %fd_x;            // + x³ / 6
     mul.f64 %fd_term, %fd_term, 0.3333333333333333;
     add.f64 %fd_exp_x, %fd_exp_x, %fd_term;
     
-    // Term 4: x^4 / 24
-    mul.f64 %fd_term, %fd_term, %fd_x;
+    mul.f64 %fd_term, %fd_term, %fd_x;            // + x⁴ / 24
     mul.f64 %fd_term, %fd_term, 0.25;
     add.f64 %fd_exp_x, %fd_exp_x, %fd_term;
 
-    // Term 5: x^5 / 120
-    mul.f64 %fd_term, %fd_term, %fd_x;
+    mul.f64 %fd_term, %fd_term, %fd_x;            // + x⁵ / 120
     mul.f64 %fd_term, %fd_term, 0.2;
     add.f64 %fd_exp_x, %fd_exp_x, %fd_term;
 
-    // Evolve St over 100% stable 64-bit bounds
+    // Update Price: S_t = S_prev * exp(x)
     mul.f64 %fd_St, %fd_St, %fd_exp_x;
 
     // Iterate until horizon is reached
@@ -158,7 +184,6 @@ L_PATH_WALK:
     @%p_path_loop bra L_PATH_WALK;
 
     // --- DIRECTIONAL CHECK AT END OF PATH ---
-    // Strict, 64-bit precise asset growth evaluation gate
     setp.gt.f64 %p_net_rise, %fd_St, %fd_S0;
     @%p_net_rise mov.u32 %r_hit_flag, 1;
 
