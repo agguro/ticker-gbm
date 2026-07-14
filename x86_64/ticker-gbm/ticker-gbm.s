@@ -16,7 +16,6 @@
                     .asciz ">> Likelihood of Net DROP   (S_T < S_0): %.2f%%\n"
     err_args:       .asciz "Usage: ./ticker-gbm <data.ticker> <target_price> <iters> <horizon>\n"
     
-    # Resolved via the assembler include path (-I) matching the $(NAME) standard
     cubin_path:     .asciz "ticker_gbm.cubin"
     kernel_name:    .asciz "ticker_gbm"
 
@@ -25,7 +24,6 @@
     .L_one:         .double 1.0
 
 .section .data
-    # 48-Byte Contiguous Structural Parameter Matrix
     .align 8
     p_drift:        .double 0.000150   # Offset 0
     .align 8
@@ -33,21 +31,17 @@
     .align 8
     p_target:       .double 0.0        # Offset 16
     .align 8
-    p_start:        .double 0.0        # Offset 24 (Populated dynamically from file tail)
+    p_start:        .double 0.0        # Offset 24
     .align 8
     p_iters:        .quad 0            # Offset 32
     .align 8
     p_horizon:      .quad 0            # Offset 40
     
-    # Internal variables
-    .align 8
     filename_ptr:   .quad 0
     total_records:  .quad 0
     host_input_ptr: .quad 0
-    target_val:     .double 0.0
     requested_paths:.quad 0            
     actual_paths:   .quad 0            
-    total_sum_acc:  .double 0.0
     total_hits_acc: .quad 0
     
     .align 16
@@ -123,47 +117,40 @@ _start:
     
     movq    48+file_stat(%rip), %r13    
     movq    %r13, %rax
-    shrq    $4, %rax                    # Total rows = File size / 16
+    shrq    $4, %rax                    
     movq    %rax, total_records(%rip)
 
     movq    $9, %rax                    
     xorq    %rdi, %rdi
     movq    %r13, %rsi              
-    movl    $1, %edx                
-    movl    $2, %r10d               
-    movq    %r12, %r8               
-    xorq    %r9, %r9                
+    movl    $1, %edx            
+    movl    $2, %r10d           
+    movq    %r12, %r8           
+    xorq    %r9, %r9            
     syscall
     movq    %rax, host_input_ptr(%rip)
 
     # --- DYNAMIC TAIL CALCULATOR ---
-    # Target Row Offset = (total_records - 1) * 16
     movq    total_records(%rip), %rcx
     decq    %rcx
-    shlq    $4, %rcx                    # Multiply by 16 via quick left-shift
-    addq    %rax, %rcx                  # Point directly to the final row index
-    
-    # Skip the 8-byte Unix timestamp chunk, load latest double float price!
+    shlq    $4, %rcx                    
+    addq    %rax, %rcx                  
     movsd   8(%rcx), %xmm0              
     movsd   %xmm0, p_start(%rip)        
 
     # --- 4. CUDA HARDWARE ORCHESTRATION ---
     xorl    %edi, %edi
     call    cuInit@PLT
-    
     leaq    cu_device(%rip), %rdi
     xorl    %esi, %esi
     call    cuDeviceGet@PLT
-    
     leaq    cu_context(%rip), %rdi
     xorl    %esi, %esi
     movl    cu_device(%rip), %edx
     call    cuCtxCreate_v2@PLT
-    
     leaq    cu_module(%rip), %rdi
     leaq    cubin_path(%rip), %rsi
     call    cuModuleLoad@PLT
-    
     leaq    cu_function(%rip), %rdi
     movq    cu_module(%rip), %rsi
     leaq    kernel_name(%rip), %rdx
@@ -173,11 +160,9 @@ _start:
     leaq    d_sums_ptr(%rip), %rdi              
     movq    $8192, %rsi                 
     call    cuMemAlloc_v2@PLT
-
     leaq    d_hits_ptr(%rip), %rdi              
     movq    $4096, %rsi                 
     call    cuMemAlloc_v2@PLT
-
     leaq    d_config_ptr(%rip), %rdi              
     movq    $48, %rsi                   
     call    cuMemAlloc_v2@PLT
@@ -195,7 +180,6 @@ _start:
     movq    %rax, gpu_launch_matrix+8(%rip)
     leaq    d_config_ptr(%rip), %rax
     movq    %rax, gpu_launch_matrix+16(%rip)
-
     leaq    gpu_launch_matrix(%rip), %r11 
 
     # --- 8. KERNEL EXECUTION ---
@@ -206,7 +190,6 @@ _start:
     movq    %r11, 24(%rsp)              
     movq    $0, 32(%rsp)                
     movq    $0, 40(%rsp)                
-
     movq    cu_function(%rip), %rdi     
     movl    $1024, %esi                 
     movl    $1, %edx                    
@@ -215,7 +198,6 @@ _start:
     movl    $1, %r9d                    
     call    cuLaunchKernel@PLT
     addq    $48, %rsp                   
-    
     call    cuCtxSynchronize@PLT
 
     # --- 9. FETCH RESULTS ---
@@ -223,8 +205,6 @@ _start:
     movq    d_hits_ptr(%rip), %rsi
     movq    $4096, %rdx
     call    cuMemcpyDtoH_v2@PLT
-
-    # Host Loop Reduction Pass
     xorq    %rax, %rax
     xorq    %rcx, %rcx
     leaq    h_hits_buf(%rip), %rdx
@@ -235,7 +215,6 @@ _start:
     addq    %rsi, %rcx
     incq    %rax
     jmp     .L_reduction
-
 .L_finalize_hits:
     movq    %rcx, total_hits_acc(%rip)
 
@@ -243,47 +222,45 @@ _start:
     leaq    msg_dash(%rip), %rdi
     xorl    %eax, %eax
     call    printf@PLT
-
     leaq    msg_header(%rip), %rdi
     movq    filename_ptr(%rip), %rsi
     xorl    %eax, %eax
     call    printf@PLT
-
     leaq    fmt_stats(%rip), %rdi
     movsd   p_drift(%rip), %xmm0
     movsd   p_vol(%rip), %xmm1
     movb    $2, %al                 
     call    printf@PLT
-
     leaq    fmt_forecast(%rip), %rdi
     movq    p_horizon(%rip), %rsi
     movq    actual_paths(%rip), %rdx    
     xorl    %eax, %eax
     call    printf@PLT
 
+    # Price Print
     leaq    fmt_prices(%rip), %rdi
-    movsd   p_start(%rip), %xmm0        # Explicitly reload double float price
-    
-    # Calculate expected price curve path
-    movsd   p_drift(%rip), %xmm1        # Temporarily use %xmm1 to store drift
-# --- PROBABILITY CALCULATION ---
-    # 1. Calculate Rise Percentage in xmm0
+    movsd   p_start(%rip), %xmm0
+    movsd   p_drift(%rip), %xmm1        
+    cvtsi2sd p_horizon(%rip), %xmm2     
+    mulsd   %xmm2, %xmm1                
+    movsd   .L_one(%rip), %xmm2         
+    addsd   %xmm2, %xmm1                
+    mulsd   %xmm0, %xmm1                
+    movb    $2, %al                     
+    call    printf@PLT
+
+    # Probability Print
     cvtsi2sd total_hits_acc(%rip), %xmm0
     cvtsi2sd actual_paths(%rip), %xmm1
-    divsd    %xmm1, %xmm0              # xmm0 = (hits / paths)
-    mulsd    .L_hundred(%rip), %xmm0    # xmm0 = Rise %
+    divsd   %xmm1, %xmm0                
+    mulsd   .L_hundred(%rip), %xmm0     
+    movsd   .L_hundred(%rip), %xmm1     
+    subsd   %xmm0, %xmm1                
+    leaq    fmt_prob(%rip), %rdi
+    movb    $2, %al                     
+    call    printf@PLT
 
-    # 2. Calculate Drop Percentage in xmm1
-    # We need to compute (100.0 - xmm0) and store in xmm1
-    movsd    .L_hundred(%rip), %xmm1    # Load 100.0
-    subsd    %xmm0, %xmm1               # xmm1 = 100.0 - Rise % = Drop %
-
-    # 3. Print
-    leaq     fmt_prob(%rip), %rdi
-    movb     $2, %al                    # Tell printf to use xmm0 and xmm1
-    call     printf@PLT
-
-    # Destroy hardware allocations
+    # Cleanup
     movq    d_sums_ptr(%rip), %rdi
     call    cuMemFree_v2@PLT
     movq    d_hits_ptr(%rip), %rdi
@@ -292,7 +269,6 @@ _start:
     call    cuMemFree_v2@PLT
     movq    cu_context(%rip), %rdi
     call    cuCtxDestroy_v2@PLT
-
     movq    $231, %rax
     xorq    %rdi, %rdi
     syscall
@@ -307,3 +283,4 @@ _start:
 
 .size _start, . - _start
 .section .note.GNU-stack,"",@progbits
+
