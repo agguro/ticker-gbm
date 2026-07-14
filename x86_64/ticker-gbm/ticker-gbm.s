@@ -14,7 +14,7 @@
     fmt_prob:       .ascii "DIRECTIONAL ANALYSIS:\n"
                     .ascii ">> Probability of Net RISE  (S_T > S_0): %.2f%%\n"
                     .asciz ">> Likelihood of Net DROP   (S_T < S_0): %.2f%%\n"
-    err_args:       .asciz "Usage: ./ticker-gbm <data.ticker> 0 <iters> <horizon>\n"
+    err_args:       .asciz "Usage: ./ticker-gbm <data.ticker> <target_price> <iters> <horizon>\n"
     
     # Resolved via the assembler include path (-I) matching the $(NAME) standard
     cubin_path:     .asciz "ticker_gbm.cubin"
