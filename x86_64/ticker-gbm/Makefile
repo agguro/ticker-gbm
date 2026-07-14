@@ -71,11 +71,7 @@ NVDISASM      := nvdisasm
 
 ASFLAGS      := --64 -msyntax=att -mmnemonic=att -I$(BUILD_DIR) -I$(INC_DIR) -I$(LIB_DIR) -I$(KERNEL_DIR) -I$(KERNEL_BUILD)
 LDFLAGS      := -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -L/usr/local/cuda/lib64 -L/usr/lib/x86_64-linux-gnu -lcuda -lc -lcrypto -lssl
-<<<<<<< HEAD
 PTXASFLAGS    := -v --gpu-name=sm_61
-=======
-PTXASFLAGS    := -v --gpu-name=sm_80
->>>>>>> e22f41f79d64cbc35d679c501e2145b8bd28af9e
 
 ifeq ($(MODE),debug)
     ASFLAGS    += -g

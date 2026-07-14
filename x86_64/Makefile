@@ -19,8 +19,4 @@ debug release clean test install:
 		fi \
 	done
 
-<<<<<<< HEAD
 .PHONY: all debug release clean test install
-=======
-.PHONY: all debug release clean test install
->>>>>>> e22f41f79d64cbc35d679c501e2145b8bd28af9e
