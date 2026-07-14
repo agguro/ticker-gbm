@@ -1,13 +1,14 @@
 # ==============================================================================
-# ASM-LINUX-FRAMEWORK: SUBMODULE ROOT ORCHESTRATOR
-# BPI-BLUEPRINT: .blueprints/submodule_root.mk
+# ASM-LINUX-FRAMEWORK: LAYER SUBROOT ORCHESTRATOR
+# BPI-BLUEPRINT: .blueprints/layer_orchestrator.mk
 # ==============================================================================
 
 ifndef LAUNCH_ROOT
-    export LAUNCH_ROOT := $(abspath $(CURDIR))/
+    export LAUNCH_ROOT := $(abspath $(CURDIR)/../../)/
 endif
 
-SUBDIRS := kernels x86_64
+ALL_DIRS := $(patsubst %/,%,$(dir $(wildcard */Makefile)))
+SUBDIRS  := $(filter-out . ..,$(ALL_DIRS))
 
 all: debug
 

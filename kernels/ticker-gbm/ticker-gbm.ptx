@@ -8,7 +8,7 @@
 .target sm_61
 .address_size 64
 
-.visible .entry monte_carlo_kernel (
+.visible .entry ticker_gbm (
     .param .u64 out_sums_ptr,       
     .param .u64 out_hits_ptr,       
     .param .u64 config_struct_ptr   
