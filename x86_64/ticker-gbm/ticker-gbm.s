@@ -308,7 +308,7 @@ _start:
     leaq     cuda_msg_launch(%rip), %rdi
     call    .L_cuda_ok
 
-    addq    $40, %rsp
+
     call    cuCtxSynchronize@PLT
     testq %rax, %rax
     jnz .L_cuda_error
