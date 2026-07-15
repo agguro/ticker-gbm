@@ -361,12 +361,14 @@ _start:
     movsd   p_vol(%rip), %xmm1
     movb    $2, %al
     call    printf@PLT
+        xorl    %eax, %eax
 
     leaq    fmt_forecast(%rip), %rdi
     movq    p_horizon(%rip), %rsi
     movq    actual_paths(%rip), %rdx
     xorl    %eax, %eax
     call    printf@PLT
+        xorl    %eax, %eax
 
     leaq    fmt_prices(%rip), %rdi
     movsd   p_start(%rip), %xmm0
@@ -378,6 +380,7 @@ _start:
     addsd   %xmm0, %xmm1
     movb    $2, %al
     call    printf@PLT
+        xorl    %eax, %eax
 
     cvtsi2sd total_hits_acc(%rip), %xmm0
     cvtsi2sd actual_paths(%rip), %xmm9
@@ -391,7 +394,8 @@ _start:
     leaq    fmt_prob(%rip), %rdi
     movb    $2, %al
     call    printf@PLT
-
+        xorl    %eax, %eax
+        
     # =========================================================================
     # 11. CLEANUP
     # =========================================================================
@@ -460,19 +464,19 @@ _start:
 # Input: %rsi = pointer to message string
 # Clobbers: %rdi, %rax
 .L_cuda_ok:
-    pushq   %rdi             # Save registers
-    pushq   %rsi
-    pushq   %rdx
     pushq   %rax
+    pushq   %rdx
+    pushq   %rsi
+    pushq   %rdi
     
-    # ... roep printf aan ...
+    # RDI bevat al het adres van de string (gezet voor de call)
     xorl    %eax, %eax
     call    printf@PLT
     
-    popq    %rax             # Restore registers
-    popq    %rdx
-    popq    %rsi
     popq    %rdi
+    popq    %rsi
+    popq    %rdx
+    popq    %rax
     ret
 
 .size _start, . - _start
