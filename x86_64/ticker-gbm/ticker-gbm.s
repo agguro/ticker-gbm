@@ -452,7 +452,6 @@ _start:
 # Input: %rsi = pointer to message string
 # Clobbers: %rdi, %rax
 .L_cuda_ok:
-    movq    %rsi, %rdi      # printf argument
     xorl    %eax, %eax      # printf: AL = number of XMM args
     call    printf@PLT
     ret
