@@ -67,11 +67,11 @@ cuda_msg_ctxdestroy:    .asciz "cuda cuCtxDestroy_v2 passed\n"
     # KERNEL PARAMETER ARRAY (CRITICAL)
     # CUDA expects: void** kernelParams = { &d_sums_ptr, &d_hits_ptr, &d_config_ptr }
     # =========================================================================
-    .align 16
+    align 16
     kernel_params:
-        .quad 0      # &d_sums_ptr
-        .quad 0      # &d_hits_ptr
-        .quad 0      # &d_config_ptr
+        .quad 0     # d_sums_ptr (waarde van de pointer)
+        .quad 0     # d_hits_ptr
+        .quad 0     # d_config_ptr
 
     file_stat:      .skip 144
 
@@ -262,40 +262,41 @@ _start:
     # =========================================================================
     # 7. BUILD CORRECT kernelParams ARRAY
     # =========================================================================
+
     leaq    kernel_params(%rip), %r10
-
-    # kernelParams[0] = &d_sums_ptr
-    leaq    d_sums_ptr(%rip), %rax
+    
+    movq    d_sums_ptr(%rip), %rax
     movq    %rax, 0(%r10)
-
-    # kernelParams[1] = &d_hits_ptr
-    leaq    d_hits_ptr(%rip), %rax
+    
+    movq    d_hits_ptr(%rip), %rax
     movq    %rax, 8(%r10)
-
-    # kernelParams[2] = &d_config_ptr
-    leaq    d_config_ptr(%rip), %rax
+    
+    movq    d_config_ptr(%rip), %rax
     movq    %rax, 16(%r10)
 
     # =========================================================================
     # 8. KERNEL LAUNCH — CORRECT SysV ABI STACK LAYOUT
     # =========================================================================
-    subq    $40, %rsp
-    movl    $1, 0(%rsp)          # blockDimZ
-    movl    $0, 8(%rsp)          # sharedMemBytes
-    movq    $0, 16(%rsp)         # hStream
-    movq    %r10, 24(%rsp)       # kernelParams
-    movq    $0, 32(%rsp)         # extra
-
-
-#    subq    $48, %rsp
-#    movq    $1, 0(%rsp)     
-#    movq    $1, 8(%rsp)     
-#    movq    $0, 16(%rsp)    
-#    leaq    k_params(%rip), %rax
-#    movq    %rax, 24(%rsp)  
-#    movq    $0, 32(%rsp)
-    movq    $0, 40(%rsp)
+    subq    $48, %rsp
+    movl    $1, 0(%rsp)        # gridDimX
+    movl    $1, 4(%rsp)        # gridDimY
+    movl    $1, 8(%rsp)        # gridDimZ
+    movl    $1, 12(%rsp)       # blockDimX
+    movl    $1, 16(%rsp)       # blockDimY
+    movl    $1, 20(%rsp)       # blockDimZ
+    movl    $0, 24(%rsp)       # sharedMemBytes
+    movq    $0, 32(%rsp)       # hStream (8 byte)
+    leaq    kernel_params(%rip), %rax
+    movq    %rax, 40(%rsp)     # kernelParams (8 byte)
+    # extra is impliciet door de layout van de driver API call
+    
+    # Roep de functie aan
+    # Zorg dat RDI, RSI, RDX, RCX, R8, R9 correct gevuld zijn
+    # cuLaunchKernel(hFunc, gx, gy, gz, bx, by, bz, sharedMem, hStream, kParams, extra)
+    
+    # ... (vul registers volgens de CUDA ABI voor de 6 integer argumenten) ...
     call    cuLaunchKernel@PLT
+    addq    $48, %rsp
 
 #    movq    cu_function(%rip), %rdi
 #    movl    $1024, %esi
