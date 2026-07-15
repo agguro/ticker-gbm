@@ -138,13 +138,13 @@ _start:
     xorq    %rsi, %rsi
     syscall
     movq    %rax, %r12
-    # todo: check for ERROR 
+     
 
     movq    $5, %rax
     movq    %r12, %rdi
     leaq    file_stat(%rip), %rsi
     syscall
-    # todo: check for ERROR 
+    
 
     movq    48+file_stat(%rip), %r13
     movq    %r13, %rax
@@ -188,7 +188,7 @@ _start:
 
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_devget(%rip), %rdi
     call    .L_cuda_ok
     
     leaq    cu_context(%rip), %rdi
@@ -198,7 +198,7 @@ _start:
 
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_ctxcreate(%rip), %rdi
     call    .L_cuda_ok
 
     # =========================================================================
@@ -209,7 +209,7 @@ _start:
     call    cuModuleLoadData@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_modload(%rip), %rdi
     call    .L_cuda_ok
 
     leaq    cu_function(%rip), %rdi
@@ -218,7 +218,7 @@ _start:
     call    cuModuleGetFunction@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_getfunc(%rip), %rdi
     call    .L_cuda_ok
 
     # =========================================================================
@@ -229,7 +229,7 @@ _start:
     call    cuMemAlloc_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_alloc_sums(%rip), %rdi
     call    .L_cuda_ok
 
     leaq    d_hits_ptr(%rip), %rdi
@@ -237,7 +237,7 @@ _start:
     call    cuMemAlloc_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_alloc_hits(%rip), %rdi
     call    .L_cuda_ok
 
     leaq    d_config_ptr(%rip), %rdi
@@ -245,7 +245,7 @@ _start:
     call    cuMemAlloc_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_alloc_cfg(%rip), %rdi
     call    .L_cuda_ok
 
     # =========================================================================
@@ -257,7 +257,7 @@ _start:
     call    cuMemcpyHtoD_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_htod(%rip), %rdi
     call    .L_cuda_ok
 
     # =========================================================================
@@ -274,45 +274,38 @@ movq    %rax, 16(%r10)
     # =========================================================================
     # 8. KERNEL LAUNCH — CORRECT SysV ABI STACK LAYOUT
     # =========================================================================
-    subq    $48, %rsp
-    movl    $1, 0(%rsp)        # gridDimX
-    movl    $1, 4(%rsp)        # gridDimY
-    movl    $1, 8(%rsp)        # gridDimZ
-    movl    $1, 12(%rsp)       # blockDimX
-    movl    $1, 16(%rsp)       # blockDimY
-    movl    $1, 20(%rsp)       # blockDimZ
-    movl    $0, 24(%rsp)       # sharedMemBytes
-    movq    $0, 32(%rsp)       # hStream (8 byte)
-    leaq    kernel_params(%rip), %rax
-    movq    %rax, 40(%rsp)     # kernelParams (8 byte)
-    # extra is impliciet door de layout van de driver API call
+ # 8. KERNEL LAUNCH — CORRECT SysV ABI
+    subq    $40, %rsp          # 5 argumenten * 8 bytes = 40
     
-    # Roep de functie aan
-    # Zorg dat RDI, RSI, RDX, RCX, R8, R9 correct gevuld zijn
-    # cuLaunchKernel(hFunc, gx, gy, gz, bx, by, bz, sharedMem, hStream, kParams, extra)
-    
-    # ... (vul registers volgens de CUDA ABI voor de 6 integer argumenten) ...
-    call    cuLaunchKernel@PLT
-    addq    $48, %rsp
+    # 1. Registers (eerste 6)
+    movq    cu_function(%rip), %rdi
+    movl    $1, %esi           # gridDimX
+    movl    $1, %edx           # gridDimY
+    movl    $1, %ecx           # gridDimZ
+    movl    $256, %r8d         # blockDimX (Aangepast naar 256)
+    movl    $1, %r9d           # blockDimY
 
-#    movq    cu_function(%rip), %rdi
-#    movl    $1024, %esi
-#    movl    $1, %edx
-#    movl    $1, %ecx
-#    movl    $256, %r8d
-#    movl    $1, %r9d
-#    call    cuLaunchKernel@PLT
+    # 2. Stack (argumenten 7 t/m 11)
+    movl    $1, 0(%rsp)        # 7: blockDimZ
+    movl    $0, 8(%rsp)        # 8: sharedMemBytes
+    movq    $0, 16(%rsp)       # 9: hStream
+    leaq    kernel_params(%rip), %rax
+    movq    %rax, 24(%rsp)     # 10: kernelParams
+    movq    $0, 32(%rsp)       # 11: extra
+    
+    call    cuLaunchKernel@PLT
+    addq    $40, %rsp
 
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_launch(%rip), %rdi
     call    .L_cuda_ok
 
     addq    $40, %rsp
     call    cuCtxSynchronize@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_sync(%rip), %rdi
     call    .L_cuda_ok
 
     # =========================================================================
@@ -324,7 +317,7 @@ movq    %rax, 16(%r10)
     call    cuMemcpyDtoH_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_dtoh(%rip), %rdi
     call    .L_cuda_ok
 
     xorq    %rax, %rax
@@ -399,28 +392,28 @@ movq    %rax, 16(%r10)
     call    cuMemFree_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_free_sums(%rip), %rdi
     call    .L_cuda_ok
 
     movq    d_hits_ptr(%rip), %rdi
     call    cuMemFree_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_free_hits(%rip), %rdi
     call    .L_cuda_ok
 
     movq    d_config_ptr(%rip), %rdi
     call    cuMemFree_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_free_cfg(%rip), %rdi
     call    .L_cuda_ok
 
     movq    cu_context(%rip), %rdi
     call    cuCtxDestroy_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_ctxdestroy(%rip), %rdi
     call    .L_cuda_ok
 
     movq    $231, %rax
