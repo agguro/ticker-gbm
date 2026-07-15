@@ -286,13 +286,25 @@ _start:
     movq    %r10, 24(%rsp)       # kernelParams
     movq    $0, 32(%rsp)         # extra
 
-    movq    cu_function(%rip), %rdi
-    movl    $1024, %esi
-    movl    $1, %edx
-    movl    $1, %ecx
-    movl    $256, %r8d
-    movl    $1, %r9d
+
+#    subq    $48, %rsp
+#    movq    $1, 0(%rsp)     
+#    movq    $1, 8(%rsp)     
+#    movq    $0, 16(%rsp)    
+#    leaq    k_params(%rip), %rax
+#    movq    %rax, 24(%rsp)  
+#    movq    $0, 32(%rsp)
+    movq    $0, 40(%rsp)
     call    cuLaunchKernel@PLT
+
+#    movq    cu_function(%rip), %rdi
+#    movl    $1024, %esi
+#    movl    $1, %edx
+#    movl    $1, %ecx
+#    movl    $256, %r8d
+#    movl    $1, %r9d
+#    call    cuLaunchKernel@PLT
+
     testq %rax, %rax
     jnz .L_cuda_error
     leaq     cuda_msg_init(%rip), %rdi
@@ -406,7 +418,7 @@ _start:
     call    cuCtxDestroy_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rdi
+    leaq     cuda_msg_init(%rip), %rd
     call    .L_cuda_ok
 
     movq    $231, %rax
