@@ -452,8 +452,19 @@ _start:
 # Input: %rsi = pointer to message string
 # Clobbers: %rdi, %rax
 .L_cuda_ok:
-    xorl    %eax, %eax      # printf: AL = number of XMM args
+    pushq   %rdi             # Save registers
+    pushq   %rsi
+    pushq   %rdx
+    pushq   %rax
+    
+    # ... roep printf aan ...
+    xorl    %eax, %eax
     call    printf@PLT
+    
+    popq    %rax             # Restore registers
+    popq    %rdx
+    popq    %rsi
+    popq    %rdi
     ret
 
 .size _start, . - _start
