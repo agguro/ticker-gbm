@@ -438,8 +438,9 @@ _start:
 # Input:  %rax = CUDA error code
 # Clobbers: %rdi, %rsi, %rax
 .L_cuda_error:
+    leaq    err_cuda(%rip), %rdi    # format string
     movq    %rax, %rdi              # error code → printf arg1
-    leaq    err_cuda(%rip), %rsi    # format string
+
     xorl    %eax, %eax              # printf needs AL = number of XMM args
     call    printf@PLT
 
