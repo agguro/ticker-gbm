@@ -67,7 +67,7 @@ cuda_msg_ctxdestroy:    .asciz "cuda cuCtxDestroy_v2 passed\n"
     # KERNEL PARAMETER ARRAY (CRITICAL)
     # CUDA expects: void** kernelParams = { &d_sums_ptr, &d_hits_ptr, &d_config_ptr }
     # =========================================================================
-    align 16
+    .align 16
     kernel_params:
         .quad 0     # d_sums_ptr (waarde van de pointer)
         .quad 0     # d_hits_ptr
