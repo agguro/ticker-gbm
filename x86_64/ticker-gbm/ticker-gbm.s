@@ -16,6 +16,7 @@
     fmt_forecast:   .ascii "Forecast Horizon    : %ld Days\n"
                     .asciz "Simulated Paths     : %ld\n\n"
     fmt_prices:     .asciz "Current Price       : %.4f\nExpected Average    : %.4f\n\n"
+    .align 8
     fmt_prob:       .ascii "DIRECTIONAL ANALYSIS:\n"
                     .ascii ">> Probability of Net RISE  (S_T > S_0): %.2f%%\n"
                     .asciz ">> Likelihood of Net DROP   (S_T < S_0): %.2f%%\n"
