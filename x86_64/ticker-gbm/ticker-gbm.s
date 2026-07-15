@@ -264,13 +264,19 @@ _start:
     # 7. BUILD CORRECT kernelParams ARRAY
     # =========================================================================
 
-movq    d_sums_ptr(%rip), %rax
-movq    %rax, 0(%r10)
-movq    d_hits_ptr(%rip), %rax
-movq    %rax, 8(%r10)
-movq    d_config_ptr(%rip), %rax
-movq    %rax, 16(%r10)
-
+# Sectie 7: Correcte opbouw voor de Driver API
+    leaq    kernel_params(%rip), %r10
+    
+    # Haal het VRAM-adres direct uit de pointer variabele
+    movq    d_sums_ptr(%rip), %rax
+    movq    %rax, 0(%r10)
+    
+    movq    d_hits_ptr(%rip), %rax
+    movq    %rax, 8(%r10)
+    
+    movq    d_config_ptr(%rip), %rax
+    movq    %rax, 16(%r10)
+    
     # =========================================================================
     # 8. KERNEL LAUNCH — CORRECT SysV ABI STACK LAYOUT
     # =========================================================================
