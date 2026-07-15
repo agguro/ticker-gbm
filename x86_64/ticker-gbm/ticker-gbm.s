@@ -264,44 +264,45 @@ _start:
     # 7. BUILD CORRECT kernelParams ARRAY
     # =========================================================================
 
-# Sectie 7: Correcte opbouw voor de Driver API
+## Sectie 7: Vullen met de VRAM adressen direct
     leaq    kernel_params(%rip), %r10
     
-    # Haal het VRAM-adres direct uit de pointer variabele
     movq    d_sums_ptr(%rip), %rax
-    movq    %rax, 0(%r10)
+    movq    %rax, 0(%r10)   # Array[0] = VRAM adres van sums
     
     movq    d_hits_ptr(%rip), %rax
-    movq    %rax, 8(%r10)
+    movq    %rax, 8(%r10)   # Array[1] = VRAM adres van hits
     
     movq    d_config_ptr(%rip), %rax
-    movq    %rax, 16(%r10)
-    
+    movq    %rax, 16(%r10)  # Array[2] = VRAM adres van config
+
     # =========================================================================
     # 8. KERNEL LAUNCH — CORRECT SysV ABI STACK LAYOUT
     # =========================================================================
- # 8. KERNEL LAUNCH — CORRECT SysV ABI
-    subq    $40, %rsp          # 5 argumenten * 8 bytes = 40
-    
-    # 1. Registers (eerste 6)
-    movq    cu_function(%rip), %rdi
-    movl    $1, %esi           # gridDimX
-    movl    $1, %edx           # gridDimY
-    movl    $1, %ecx           # gridDimZ
-    movl    $256, %r8d         # blockDimX (Aangepast naar 256)
-    movl    $1, %r9d           # blockDimY
-
-    # 2. Stack (argumenten 7 t/m 11)
-    movl    $1, 0(%rsp)        # 7: blockDimZ
-    movl    $0, 8(%rsp)        # 8: sharedMemBytes
+ # 8. KERNEL LAUNCH
+    subq    $48, %rsp
+    movq    $1, 0(%rsp)        # 7: blockDimZ (Moet 8 bytes zijn, geen 4!)
+    movq    $1, 8(%rsp)        # 8: sharedMemBytes (8 bytes)
     movq    $0, 16(%rsp)       # 9: hStream
+    
     leaq    kernel_params(%rip), %rax
     movq    %rax, 24(%rsp)     # 10: kernelParams
+    
     movq    $0, 32(%rsp)       # 11: extra
+    # Let op: de 40(%rsp) hoeft hier niet te worden ingesteld als je subq $48 doet
+    
+    # Roep aan
+    # Zorg dat RDI, RSI, RDX, RCX, R8, R9 correct zijn
+    movq    cu_function(%rip), %rdi
+    movl    $1024, %esi        # gridDimX
+    movl    $1, %edx           # gridDimY
+    movl    $1, %ecx           # gridDimZ
+    movl    $256, %r8d         # blockDimX
+    movl    $1, %r9d           # blockDimY
     
     call    cuLaunchKernel@PLT
-    addq    $40, %rsp
-
+    addq    $48, %rsp
+    
     testq %rax, %rax
     jnz .L_cuda_error
     leaq     cuda_msg_launch(%rip), %rdi
