@@ -418,7 +418,7 @@ _start:
     call    cuCtxDestroy_v2@PLT
     testq %rax, %rax
     jnz .L_cuda_error
-    leaq     cuda_msg_init(%rip), %rd
+    leaq     cuda_msg_init(%rip), %rdi
     call    .L_cuda_ok
 
     movq    $231, %rax
