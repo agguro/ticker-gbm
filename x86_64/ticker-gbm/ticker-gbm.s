@@ -20,6 +20,7 @@
                     .ascii ">> Probability of Net RISE  (S_T > S_0): %.2f%%\n"
                     .asciz ">> Likelihood of Net DROP   (S_T < S_0): %.2f%%\n"
     err_args:       .asciz "Usage: ./ticker-gbm <data.ticker> 0 <iters> <horizon>\n"
+    err_cuda:       .asciz "CUDA ERROR: %ld\n"
 
     .align 8
     .L_hundred:     .double 100.0
@@ -113,16 +114,19 @@ _start:
     # =========================================================================
     # 2. MMAP INPUT FILE + LOAD LAST PRICE
     # =========================================================================
+
     movq    $2, %rax
     movq    filename_ptr(%rip), %rdi
     xorq    %rsi, %rsi
     syscall
     movq    %rax, %r12
+    # todo: check for ERROR 
 
     movq    $5, %rax
     movq    %r12, %rdi
     leaq    file_stat(%rip), %rsi
     syscall
+    # todo: check for ERROR 
 
     movq    48+file_stat(%rip), %r13
     movq    %r13, %rax
@@ -138,6 +142,7 @@ _start:
     xorq    %r9, %r9
     syscall
     movq    %rax, host_input_ptr(%rip)
+    # todo: check for ERROR 
 
     movq    total_records(%rip), %rcx
     decq    %rcx
@@ -147,32 +152,44 @@ _start:
     movsd   8(%rcx), %xmm0
     movsd   %xmm0, p_start(%rip)
 
+
     # =========================================================================
     # 3. CUDA INIT
     # =========================================================================
     xorl    %edi, %edi
     call    cuInit@PLT
+    testq %rax, %rax
+    jnz .L_cuda_error
 
+    
     leaq    cu_device(%rip), %rdi
     xorl    %esi, %esi
     call    cuDeviceGet@PLT
-
+testq %rax, %rax
+jnz .L_cuda_error
+    
     leaq    cu_context(%rip), %rdi
     xorl    %esi, %esi
     movl    cu_device(%rip), %edx
     call    cuCtxCreate_v2@PLT
-
+testq %rax, %rax
+jnz .L_cuda_error
+    
     # =========================================================================
     # 4. LOAD EMBEDDED CUBIN
     # =========================================================================
     leaq    cu_module(%rip), %rdi
     leaq    kernel_bin(%rip), %rsi
     call    cuModuleLoadData@PLT
+testq %rax, %rax
+jnz .L_cuda_error
 
     leaq    cu_function(%rip), %rdi
     movq    cu_module(%rip), %rsi
     leaq    kernel_name(%rip), %rdx
     call    cuModuleGetFunction@PLT
+testq %rax, %rax
+jnz .L_cuda_error
 
     # =========================================================================
     # 5. VRAM ALLOC
@@ -180,14 +197,20 @@ _start:
     leaq    d_sums_ptr(%rip), %rdi
     movq    $8192, %rsi
     call    cuMemAlloc_v2@PLT
+testq %rax, %rax
+jnz .L_cuda_error
 
     leaq    d_hits_ptr(%rip), %rdi
     movq    $4096, %rsi
     call    cuMemAlloc_v2@PLT
+testq %rax, %rax
+jnz .L_cuda_error
 
     leaq    d_config_ptr(%rip), %rdi
     movq    $48, %rsi
     call    cuMemAlloc_v2@PLT
+testq %rax, %rax
+jnz .L_cuda_error
 
     # =========================================================================
     # 6. COPY CONFIG STRUCT TO DEVICE
@@ -196,6 +219,8 @@ _start:
     leaq    p_drift(%rip), %rsi
     movq    $48, %rdx
     call    cuMemcpyHtoD_v2@PLT
+testq %rax, %rax
+jnz .L_cuda_error
 
     # =========================================================================
     # 7. BUILD CORRECT kernelParams ARRAY
@@ -231,9 +256,13 @@ _start:
     movl    $256, %r8d
     movl    $1, %r9d
     call    cuLaunchKernel@PLT
-    addq    $40, %rsp
+testq %rax, %rax
+jnz .L_cuda_error
 
+    addq    $40, %rsp
     call    cuCtxSynchronize@PLT
+testq %rax, %rax
+jnz .L_cuda_error
 
     # =========================================================================
     # 9. COPY BACK RESULTS
@@ -242,6 +271,8 @@ _start:
     movq    d_hits_ptr(%rip), %rsi
     movq    $4096, %rdx
     call    cuMemcpyDtoH_v2@PLT
+testq %rax, %rax
+jnz .L_cuda_error
 
     xorq    %rax, %rax
     xorq    %rcx, %rcx
@@ -309,12 +340,23 @@ _start:
     # =========================================================================
     movq    d_sums_ptr(%rip), %rdi
     call    cuMemFree_v2@PLT
+testq %rax, %rax
+jnz .L_cuda_error
+
     movq    d_hits_ptr(%rip), %rdi
     call    cuMemFree_v2@PLT
+testq %rax, %rax
+jnz .L_cuda_error
+
     movq    d_config_ptr(%rip), %rdi
     call    cuMemFree_v2@PLT
+testq %rax, %rax
+jnz .L_cuda_error
+
     movq    cu_context(%rip), %rdi
     call    cuCtxDestroy_v2@PLT
+testq %rax, %rax
+jnz .L_cuda_error
 
     movq    $231, %rax
     xorq    %rdi, %rdi
@@ -328,5 +370,19 @@ _start:
     movq    $1, %rdi
     syscall
 
+# --- CUDA error handler ---
+# Input:  %rax = CUDA error code
+# Clobbers: %rdi, %rsi, %rax
+.L_cuda_error:
+    movq    %rax, %rdi              # error code → printf arg1
+    leaq    err_cuda(%rip), %rsi    # format string
+    xorl    %eax, %eax              # printf needs AL = number of XMM args
+    call    printf@PLT
+
+    movq    $231, %rax              # exit_group
+    movq    $1, %rdi                # status = 1
+    syscall
+
 .size _start, . - _start
 .section .note.GNU-stack,"",@progbits
+
