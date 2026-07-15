@@ -438,14 +438,21 @@ _start:
 # Input:  %rax = CUDA error code
 # Clobbers: %rdi, %rsi, %rax
 .L_cuda_error:
-    leaq    err_cuda(%rip), %rdi    # format string
-    movq    %rax, %rdi              # error code → printf arg1
+    # 1. Format string in RDI (1e argument)
+    leaq    err_cuda(%rip), %rdi   
 
-    xorl    %eax, %eax              # printf needs AL = number of XMM args
+    # 2. Error code in RSI (2e argument voor %ld)
+    # Let op: Omdat je in RDI de string had geladen, moet je 
+    # de error code (die in RAX staat) nu in RSI verplaatsen.
+    movq    %rax, %rsi             
+
+    # 3. Printf aanroep
+    xorl    %eax, %eax             # AL = 0, want er zijn geen XMM argumenten
     call    printf@PLT
 
-    movq    $231, %rax              # exit_group
-    movq    $1, %rdi                # status = 1
+    # 4. Exit
+    movq    $231, %rax
+    movq    $1, %rdi
     syscall
 
 # --- General CUDA OK message printer ---
