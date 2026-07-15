@@ -267,13 +267,13 @@ _start:
 ## Sectie 7: Vullen met de VRAM adressen direct
     leaq    kernel_params(%rip), %r10
     
-    movq    d_sums_ptr(%rip), %rax
+    leaq    d_sums_ptr(%rip), %rax
     movq    %rax, 0(%r10)   # Array[0] = VRAM adres van sums
     
-    movq    d_hits_ptr(%rip), %rax
+    leaq    d_hits_ptr(%rip), %rax
     movq    %rax, 8(%r10)   # Array[1] = VRAM adres van hits
     
-    movq    d_config_ptr(%rip), %rax
+    leaq    d_config_ptr(%rip), %rax
     movq    %rax, 16(%r10)  # Array[2] = VRAM adres van config
 
     # =========================================================================
@@ -302,7 +302,7 @@ _start:
     
     call    cuLaunchKernel@PLT
     addq    $48, %rsp
-    
+
     testq %rax, %rax
     jnz .L_cuda_error
     leaq     cuda_msg_launch(%rip), %rdi
