@@ -24,8 +24,8 @@
 
 .section .rodata
     .align 16
-    kernel_bin:     .incbin "ticker-gbm.cubin"
-    kernel_name:    .asciz  "ticker_gbm"
+    kernel_bin:     .incbin "gbm_monte_carlo.cubin"
+    kernel_name:    .asciz  "gbm_monte_carlo"
 
     msg_dash:       .asciz "------------------------------------------------------------\n"
     msg_header:     .asciz "SIMULATION DIRECTIONAL FORECAST (%s)\n"

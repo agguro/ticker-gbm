@@ -1,0 +1,285 @@
+// ==============================================================================
+// File:        gbm_monte_carlo.ptx
+// Author:      agguro
+// Date:        August 20, 2026 
+// Description: CUDA PTX kernel for Geometric Brownian Motion / Stochastic Path Simulation.
+//              Compiled to .cubin and embedded in the host binary.
+// Architecture: NVIDIA PTX sm_61
+//
+// Note on Precision: 
+// Please note that the current floating-point precision on this GPU kernel does not
+// yet match full CPU double-precision standards. This will be addressed in an upcoming
+// update—though since time is limited, be sure to check back here regularly for the latest
+// revisions.
+//
+// Copyright 2026 agguro
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//        http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ==============================================================================
+
+.version 7.0
+.target sm_61
+.address_size 64
+
+.visible .entry gbm_monte_carlo (
+    .param .u64 out_sums_ptr,         // Pointer to global VRAM array for accumulated path values
+    .param .u64 out_hits_ptr,         // Pointer to global VRAM array for threshold success counters
+    .param .u64 config_struct_ptr     // Pointer to host-prepared simulation configuration structure
+)
+{
+    // ==========================================================================
+    // 1. REGISTER DEFINITIONS & TYPE ALLOCATIONS
+    // Allocate registers across scalar integers (.b32/.b64), double floats (.f64),
+    // single floats (.f32), and execution predicates (.pred).
+    // ==========================================================================
+    .reg .b32     %r_tid;             // Local thread ID within the block (%tid.x)
+    .reg .b32     %r_ctaid;           // Block ID within the grid (%ctaid.x)
+    .reg .b32     %r_ntid;            // Total number of threads per block (%ntid.x)
+    .reg .b32     %r_day_cnt;         // Current step counter in the simulation horizon
+    .reg .b32     %r_hit_flag;        // Flag indicating if a path crossed the threshold value
+    .reg .b32     %r_final_hits;      // Total successful threshold hits aggregated by the thread
+    .reg .b64     %rd_state;          // Current state variable for the Xorshift64* PRNG
+    .reg .b64     %rd_tmp;            // Temporary 64-bit general-purpose scratch register
+    .reg .b64     %rd_off;            // Memory or index byte offset calculations
+    .reg .b64     %rd_sums_ptr;       // Base pointer to global VRAM array for value sums
+    .reg .b64     %rd_hits_ptr;       // Base pointer to global VRAM array for hit counters
+    .reg .b64     %rd_mult;           // Constant multiplier for Xorshift64* state mixing
+    .reg .b64     %rd_config;         // Base memory address of the configuration structure
+    .reg .b64     %rd_iters;          // Total number of simulation iterations per thread
+    .reg .b64     %rd_horizon;        // Forecast time horizon in steps per path
+    .reg .b64     %rd_day_cnt;        // 64-bit counter tracking steps during path evolution
+    .reg .b64     %rd_total_hits;     // Accumulated counter for paths exceeding threshold
+    .reg .b64     %rd_sim_cnt;        // Counter tracking completed simulation paths
+    .reg .f64     %fd_sum_acc;        // Accumulator for final path values (double precision)
+    .reg .f64     %fd_S0;             // Starting state value (Initial condition X0)
+    .reg .f64     %fd_target;         // User-defined target threshold value
+    .reg .f64     %fd_drift;          // Drift coefficient (mu)
+    .reg .f64     %fd_vol;            // Diffusion / volatility coefficient (sigma)
+    .reg .f64     %fd_St;             // Evolving state value at current time step t
+    .reg .f64     %fd_drift_term;     // Pre-calculated drift adjustment term: (mu - 0.5 * sigma^2)
+    .reg .f64     %fd_u1;             // First uniform random variable in range [0, 1) (double precision)
+    .reg .f64     %fd_u2;             // Second uniform random variable in range [0, 1) (double precision)
+    .reg .f64     %fd_z;              // Standard normal deviate Z ~ N(0,1) (double precision)
+    .reg .f64     %fd_temp;           // Temporary 64-bit floating-point scratch register
+    .reg .f64     %fd_x;              // Total stochastic increment (drift + diffusion)
+    .reg .f64     %fd_term;           // Temporary term used in Taylor series expansion
+    .reg .f64     %fd_exp_x;          // Exponential approximation result for exp(x)
+    .reg .f32     %f_u1;              // First uniform random variable converted to single precision for intrinsics
+    .reg .f32     %f_u2;              // Second uniform random variable converted to single precision for intrinsics
+    .reg .f32     %f_z;               // Standard normal deviate computed via fast single-precision intrinsics
+    .reg .f32     %f_temp;            // Temporary 32-bit floating-point scratch register for math intrinsics
+    .reg .pred    %p_sim_loop;        // Predicate controlling the outer simulation loop (iterations)
+    .reg .pred    %p_path_loop;       // Predicate controlling the inner path walk loop (time horizon)
+    .reg .pred    %p_net_rise;        // Predicate for conditional checks (e.g., block leader check or threshold hit)
+
+    // ==========================================================================
+    // 2. UNPACK STRUCT ADDRESS PARAMETER
+    // Load the 64-bit base memory address of the configuration structure from kernel parameters.
+    // ==========================================================================
+    ld.param.u64  %rd_config, [config_struct_ptr];
+
+    // ==========================================================================
+    // 3. EXTRACTION FROM CONFIG STRUCTURE OFFSET MAP
+    // Fetch individual simulation parameters from host memory into dedicated registers
+    // using strict byte offsets matching the 48-byte host layout structure.
+    // ==========================================================================
+    ld.global.f64 %fd_drift,    [%rd_config + 0];     // Offset +0: Drift coefficient (mu)
+    ld.global.f64 %fd_vol,      [%rd_config + 8];     // Offset +8: Diffusion / volatility coefficient (sigma)
+    ld.global.f64 %fd_target,   [%rd_config + 16];    // Offset +16: User-defined target threshold value
+    ld.global.f64 %fd_S0,       [%rd_config + 24];    // Offset +24: Starting state value (Initial condition X0)
+    ld.global.u64 %rd_iters,    [%rd_config + 32];    // Offset +32: Number of simulation iterations per thread
+    ld.global.u64 %rd_horizon,  [%rd_config + 40];    // Offset +40: Forecast time horizon in steps
+
+    // ==========================================================================
+    // 4. THREAD IDENTIFICATION INDEX TRACKERS
+    // Capture hardware thread context (Thread ID, Block ID, Block Dimension size)
+    // to establish a unique global coordinate for pseudo-random number generation.
+    // ==========================================================================
+    mov.u32       %r_tid, %tid.x;                     // Local thread index within the current thread block
+    mov.u32       %r_ctaid, %ctaid.x;                 // Block index within the grid layout
+    mov.u32       %r_ntid, %ntid.x;                   // Total number of threads per block
+
+    // ==========================================================================
+    // 5. COEFFICIENT NORMALIZATION & PRE-CALCULATION
+    // Clamp extreme drift and diffusion values to prevent arithmetic overflows
+    // or numerical instability during exponential path evolution.
+    // Pre-calculate the drift adjustment term: (mu - 0.5 * sigma^2)
+    // ==========================================================================
+    min.f64       %fd_vol, %fd_vol, 0.5;              // Cap maximum diffusion at 0.5 to avoid wide divergence
+    max.f64       %fd_drift, %fd_drift, -0.2;         // Floor minimum drift at -0.2
+    min.f64       %fd_drift, %fd_drift, 0.2;          // Ceiling maximum drift at +0.2
+
+    mul.f64       %fd_temp, %fd_vol, %fd_vol;         // Calculate sigma^2
+    fma.rn.f64    %fd_drift_term, %fd_temp, -0.5, %fd_drift; // Compute (mu - 0.5 * sigma^2) in one FMA instruction
+    mov.u64       %rd_mult, 0x2545F4914F6CDD1D;       // Constant multiplier for Xorshift64* state mixing
+
+    // ==========================================================================
+    // 6. HARDWARE ON-CHIP SEEDING GENERATION
+    // Initialize a distinct, non-overlapping pseudo-random state for every individual thread
+    // by combining hardware clock cycles, block coordinates, and thread indices.
+    // ==========================================================================
+    mov.u64       %rd_state, %clock64;                // Read high-resolution GPU hardware performance counter clock
+    mad.lo.u32    %r_final_hits, %r_ctaid, %r_ntid, %r_tid; // Compute global linear thread ID
+    cvt.u64.u32   %rd_off, %r_final_hits;
+    mul.lo.u64    %rd_state, %rd_state, 0x9E3779B97F4A7C15; // Mix clock state with golden ratio prime constant
+    add.u64       %rd_state, %rd_state, %rd_off;              // Inject thread-specific offset
+    or.b64        %rd_state, %rd_state, 1;            // Ensure state is never zero (required for shift-register PRNGs)
+
+    // ==========================================================================
+    // 7. INITIALIZE ACCUMULATORS & BLOCK REDUCTION BUFFERS
+    // Reset local registers and ensure thread 0 of each block initializes global VRAM
+    // reduction slots before synchronizing all threads within the block.
+    // ==========================================================================
+    mov.f64       %fd_sum_acc, 0.0;                   // Accumulator for final path values
+    mov.u64       %rd_total_hits, 0;                  // Counter for paths exceeding threshold
+    mov.u64       %rd_sim_cnt, 0;                     // Outer loop iteration counter
+
+    setp.eq.u32   %p_net_rise, %r_tid, 0;             // Check if current thread is leader thread 0 of the block
+    @%p_net_rise  cvt.u64.u32 %rd_off, %r_ctaid;
+    @%p_net_rise  shl.b64 %rd_tmp, %rd_off, 2;                        
+    @%p_net_rise  ld.param.u64 %rd_hits_ptr, [out_hits_ptr]; 
+    @%p_net_rise  add.u64 %rd_hits_ptr, %rd_hits_ptr, %rd_tmp; 
+    @%p_net_rise  st.global.u32 [%rd_hits_ptr], 0;             // Zero out global hit counter slot for this block
+
+    @%p_net_rise  shl.b64 %rd_tmp, %rd_off, 3;                        
+    @%p_net_rise  ld.param.u64 %rd_sums_ptr, [out_sums_ptr]; 
+    @%p_net_rise  add.u64 %rd_sums_ptr, %rd_sums_ptr, %rd_tmp; 
+    @%p_net_rise  st.global.f64 [%rd_sums_ptr], 0.0;             // Zero out global value sum slot for this block
+    
+    bar.sync      0;                                  // Barrier synchronization: wait for all threads to reach this point
+
+L_SIM_LOOP:
+    mov.f64       %fd_St, %fd_S0;                     // Reset state path back to initial condition S0 for new simulation run
+    mov.u32       %r_day_cnt, 0;                      // Reset step counter
+    mov.u32       %r_hit_flag, 0;                     // Reset threshold success flag for this path
+
+L_PATH_WALK:
+    // ==========================================================================
+    // 8. RANDOM SEQUENCE GENERATION (Xorshift64*) -> U(0,1)
+    // Execute high-speed bitwise Xorshift operations to generate pseudo-random 64-bit integers,
+    // then map them into IEEE-754 floating-point uniform distribution values within range (0, 1].
+    // ==========================================================================
+    add.u64       %rd_state, %rd_state, 0xDA442DE31966E40D;
+    shl.b64       %rd_off, %rd_state, 13; 
+    xor.b64       %rd_state, %rd_state, %rd_off;
+    shr.u64       %rd_off, %rd_state, 7;  
+    xor.b64       %rd_state, %rd_state, %rd_off;
+    shl.b64       %rd_off, %rd_state, 17; 
+    xor.b64       %rd_state, %rd_state, %rd_off;
+    mul.lo.u64    %rd_tmp, %rd_state, %rd_mult;
+    and.b64       %rd_off, %rd_tmp, 0xFFFFFFFFFFFFF;
+    or.b64        %rd_off, %rd_off, 0x3FF0000000000000; // Inject exponent bits to form double precision float [1.0, 2.0)
+    mov.b64       %fd_u1, %rd_off;
+    sub.f64       %fd_u1, %fd_u1, 1.0;                // Shift range down to uniform [0.0, 1.0)
+
+    // Repeat identical PRNG steps to obtain a second independent uniform random variable (u2)
+    add.u64       %rd_state, %rd_state, 0xDA442DE31966E40D;
+    shl.b64       %rd_off, %rd_state, 13; 
+    xor.b64       %rd_state, %rd_state, %rd_off;
+    shr.u64       %rd_off, %rd_state, 7;  
+    xor.b64       %rd_state, %rd_state, %rd_off;
+    shl.b64       %rd_off, %rd_state, 17; 
+    xor.b64       %rd_state, %rd_state, %rd_off;
+    mul.lo.u64    %rd_tmp, %rd_state, %rd_mult;
+    and.b64       %rd_off, %rd_tmp, 0xFFFFFFFFFFFFF;
+    or.b64        %rd_off, %rd_off, 0x3FF0000000000000;
+    mov.b64       %fd_u2, %rd_off;
+    sub.f64       %fd_u2, %fd_u2, 1.0;
+
+    // ==========================================================================
+    // 9. BOX-MULLER TRANSFORM -> STANDARD NORMAL N(0,1)
+    // Transform two independent uniform random variables (u1, u2) into a standard normal
+    // distributed random variable (Z ~ N(0,1)) using hardware-accelerated approximate intrinsics.
+    // ==========================================================================
+    cvt.rn.f32.f64 %f_u1, %fd_u1;
+    max.f32       %f_u1, %f_u1, 1.0e-7;               // Floor at small epsilon to prevent log(0) undefined singularities
+    lg2.approx.f32 %f_temp, %f_u1;                    // Compute approximate base-2 logarithm
+    mul.f32       %f_temp, %f_temp, -1.38629436;      // Scale log2 to natural logarithm (-2 * ln(u1))
+    sqrt.approx.f32 %f_temp, %f_temp;                 // Take square root of logarithmic term
+    
+    cvt.rn.f32.f64 %f_u2, %fd_u2;
+    mul.f32       %f_u2, %f_u2, 6.2831853;              // Multiply second uniform variable by 2 * pi (radians)
+    cos.approx.f32 %f_z, %f_u2;                       // Compute cosine component for Box-Muller polar transformation
+    mul.f32       %f_z, %f_z, %f_temp;                // Combine magnitude and angle to produce standard normal deviate Z
+    cvt.f64.f32   %fd_z, %f_z;                        // Promote normal deviate back to double precision
+
+    // ==========================================================================
+    // 10. PURE 64-BIT IEEE-754 STATE EVOLUTION STEP (EXPONENTIAL TAYLOR)
+    // Calculate stochastic increment: x = (drift_term + diffusion * Z)
+    // Approximate exponential function exp(x) efficiently using a 5th-degree Taylor series expansion.
+    // Update state path: St = St * exp(x)
+    // ==========================================================================
+    fma.rn.f64    %fd_x, %fd_vol, %fd_z, %fd_drift_term; // Calculate total exponent increment x
+
+    mov.f64       %fd_exp_x, 1.0;                     // Taylor term 0: 1
+    add.f64       %fd_exp_x, %fd_exp_x, %fd_x;        // Taylor term 1: + x
+    
+    mul.f64       %fd_term, %fd_x, %fd_x;
+    mul.f64       %fd_term, %fd_term, 0.5;
+    add.f64       %fd_exp_x, %fd_exp_x, %fd_term;     // Taylor term 2: + x^2 / 2!
+    
+    mul.f64       %fd_term, %fd_term, %fd_x;
+    mul.f64       %fd_term, %fd_term, 0.3333333333333333; 
+    add.f64       %fd_exp_x, %fd_exp_x, %fd_term;     // Taylor term 3: + x^3 / 3!
+    
+    mul.f64       %fd_term, %fd_term, %fd_x;
+    mul.f64       %fd_term, %fd_term, 0.25; 
+    add.f64       %fd_exp_x, %fd_exp_x, %fd_term;     // Taylor term 4: + x^4 / 4!
+
+    mul.f64       %fd_term, %fd_term, %fd_x;
+    mul.f64       %fd_term, %fd_term, 0.2;  
+    add.f64       %fd_exp_x, %fd_exp_x, %fd_term;     // Taylor term 5: + x^5 / 5!
+
+    mul.f64       %fd_St, %fd_St, %fd_exp_x;          // Apply growth factor to current state value St
+
+    add.u32       %r_day_cnt, %r_day_cnt, 1;          // Increment step counter
+    cvt.u64.u32   %rd_tmp, %r_day_cnt;
+    setp.lt.u64   %p_path_loop, %rd_tmp, %rd_horizon; // Check if time horizon has been reached
+    @%p_path_loop bra L_PATH_WALK;                    // Loop to next step if horizon not complete
+
+    // ==========================================================================
+    // 11. THRESHOLD CHECK AT END OF PATH
+    // Compare final simulated state value (St) against the target threshold.
+    // Record successful threshold exceedances and accumulate final path values.
+    // ==========================================================================
+    setp.gt.f64   %p_net_rise, %fd_St, %fd_target;    // Check if St > Target Threshold
+    @%p_net_rise  mov.u32 %r_hit_flag, 1;             // Set hit flag to 1 if threshold condition met
+
+    add.f64       %fd_sum_acc, %fd_sum_acc, %fd_St;   // Accumulate final value into local thread sum
+    cvt.u64.u32   %rd_tmp, %r_hit_flag;
+    add.u64       %rd_total_hits, %rd_total_hits, %rd_tmp; // Accumulate threshold success hits
+
+    add.u64       %rd_sim_cnt, %rd_sim_cnt, 1;        // Increment simulation iteration counter
+    setp.lt.u64   %p_sim_loop, %rd_sim_cnt, %rd_iters; // Check if all requested iterations are finished
+    @%p_sim_loop  bra L_SIM_LOOP;                     // Loop back to start new path simulation
+
+    // ==========================================================================
+    // 12. HIGH-SPEED HARDWARE ATOMIC REDUCTION PASSTHROUGH
+    // Safely aggregate thread-local results into global VRAM reduction arrays
+    // using hardware-accelerated atomic addition instructions across thread blocks.
+    // ==========================================================================
+    cvt.u64.u32   %rd_off, %r_ctaid;
+    
+    shl.b64       %rd_tmp, %rd_off, 3;                // Multiply block index by 8 bytes (sizeof double)
+    ld.param.u64  %rd_sums_ptr, [out_sums_ptr];
+    add.u64       %rd_sums_ptr, %rd_sums_ptr, %rd_tmp;
+    atom.global.add.f64 %fd_sum_acc, [%rd_sums_ptr], %fd_sum_acc; // Atomic reduction of value sums in global memory
+
+    shl.b64       %rd_tmp, %rd_off, 2;                // Multiply block index by 4 bytes (sizeof uint32)
+    ld.param.u64  %rd_hits_ptr, [out_hits_ptr];
+    add.u64       %rd_hits_ptr, %rd_hits_ptr, %rd_tmp;
+    cvt.u32.u64   %r_final_hits, %rd_total_hits;
+    atom.global.add.u32 %r_final_hits, [%rd_hits_ptr], %r_final_hits; // Atomic reduction of hit counts in global memory
+
+    ret;                                              // Terminate thread execution
+}
