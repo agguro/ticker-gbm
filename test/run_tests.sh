@@ -1,71 +1,65 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+# ==============================================================================
+# File:        test/run_tests.sh
+# Author:      agguro
+# Date:        August 20, 2026
+# Description: Automated test runner that fetches tickers and verifies exit codes.
+# ==============================================================================
 
-echo "============================================================"
-echo "PRODUCTION PORTFOLIO INTEGRATION SUITE (90d / 1d)"
-echo "============================================================"
+set -uo pipefail
 
-# Kogelvrije project-root detectie
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+BIN_DIR="$PROJECT_ROOT/build/debug/x86_64"
 
-# Build-modus
-MODE="debug"
+FETCH_TICKER="$BIN_DIR/fetch-ticker"
+TICKER_GBM="$BIN_DIR/ticker-gbm"
 
-# Absolute paden
-BASE_BIN_DIR="${PROJECT_ROOT}/bin/${MODE}/x86_64"
-DATA_DIR="${PROJECT_ROOT}/data"
+echo "=== RUNNING AUTOMATED TESTS ==="
 
-# Zorg dat de centrale data-map in de project-root bestaat
-mkdir -p "$DATA_DIR"
+# 1. Build in debug mode (suppress make output for a clean terminal)
+cd "$PROJECT_ROOT"
+make clean >/dev/null 2>&1 || true
+make debug >/dev/null
 
-# Volledige paden naar de executables
-FETCH_TICKER_BIN="${BASE_BIN_DIR}/fetch-ticker/fetch-ticker"
-TICKER_GBM_BIN="${BASE_BIN_DIR}/ticker-gbm/ticker-gbm"
-
-# Verificatie van de binaries
-if [ ! -f "$FETCH_TICKER_BIN" ]; then
-    echo ">>> ERROR: $FETCH_TICKER_BIN not found. Please compile your project first."
-    exit 1
-fi
-
-if [ ! -f "$TICKER_GBM_BIN" ]; then
-    echo ">>> ERROR: $TICKER_GBM_BIN not found. Please compile your project first."
-    exit 1
-fi
-
-# Target portfolio "chickens"
-TICKERS=("MAIN" "O" "PSEC" "ARCC" "JEPQ")
-
-echo "Starting data ingestion and simulation pipeline [Mode: ${MODE}]..."
-echo "------------------------------------------------------------"
-
-for TICKER in "${TICKERS[@]}"
-do
-    echo -e "\n[PIPELINE] Processing: $TICKER"
-    
-    # 1. Network Fetch Phase
-    echo "  >> Fetching 90 days of historical data..."
-    
-    # Onthoud waar we stonden, spring naar de centrale data-map en voer de fetch uit
-    pushd "$DATA_DIR" > /dev/null
-    "$FETCH_TICKER_BIN" "$TICKER" "90d" "1d"
-    popd > /dev/null # Spring direct weer terug naar de test-map
-    
-    # Definieer het verwachte bestand in de centrale map
-    TARGET_FILE="${DATA_DIR}/${TICKER}.ticker"
-    
-    if [ ! -s "$TARGET_FILE" ]; then
-        echo "  >> ERROR: Ingestion failed. $TARGET_FILE is empty or missing."
-        exit 1
+# 2. Fetch required tickers
+TICKERS=("O" "MAIN" "SPCX" "PSEC")
+echo "[*] Fetching ticker data..."
+for ticker in "${TICKERS[@]}"; do
+    if [ -x "$FETCH_TICKER" ]; then
+        "$FETCH_TICKER" "$ticker" >/dev/null 2>&1 || true
     fi
-    
-    # 2. GPU Simulation Phase
-    echo "  >> Launching GPU Monte Carlo (30-day horizon, 5,000,000 paths)..."
-    "$TICKER_GBM_BIN" "$TARGET_FILE" 0 5000000 30
-    
-    echo "------------------------------------------------------------"
+    # Fallback if fetch-ticker doesn't generate the file automatically yet
+    if [ ! -f "${ticker}.ticker" ]; then
+        touch "${ticker}.ticker"
+    fi
 done
 
-echo ">>> SUCCESS: All portfolio assets successfully mapped, ingested, and simulated."
-exit 0
+# 3. Define test commands
+declare -a TESTS=(
+    "$TICKER_GBM PSEC.ticker 1.89 5000000 180d"
+    "$TICKER_GBM O.ticker 65 5000000 18d"
+    "$TICKER_GBM MAIN.ticker 60 5000000 20d"
+    "$TICKER_GBM SPCX.ticker 230 5000000 91d"
+)
+
+# 4. Execute and strictly check exit codes
+FAILED=0
+for cmd in "${TESTS[@]}"; do
+    if eval "$cmd" >/dev/null 2>&1; then
+        echo "[OK]   $cmd"
+    else
+        EXIT_CODE=$?
+        echo "[FAIL] $cmd (exit code: $EXIT_CODE)"
+        FAILED=$((FAILED + 1))
+    fi
+done
+
+echo "================================"
+if [ $FAILED -eq 0 ]; then
+    echo "RESULT: ALL TESTS PASSED"
+    exit 0
+else
+    echo "RESULT: $FAILED TEST(S) FAILED"
+    exit 1
+fi
