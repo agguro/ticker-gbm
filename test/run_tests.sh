@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # File:        test/run_tests.sh
-# File:        test/run_tests.sh
 # Author:      agguro
 # Date:        August 20, 2026
 # Description: Automated test runner that fetches tickers and verifies exit codes.
@@ -23,21 +22,17 @@ cd "$PROJECT_ROOT"
 make clean >/dev/null 2>&1 || true
 make debug >/dev/null
 
-# 2. Fetch required tickers directly into the test/ directory
+# 2. Fetch required tickers using the correct CLI arguments: fetch-ticker <ticker> <interval> <range>
+# Output is saved directly as <ticker>.ticker inside the test/ directory
 TICKERS=("O" "MAIN" "SPCX" "PSEC")
 echo "[*] Fetching ticker data..."
 for ticker in "${TICKERS[@]}"; do
-    # Run fetch-ticker and ensure output ends up in test/
     if [ -x "$FETCH_TICKER" ]; then
-        "$FETCH_TICKER" "$ticker" >/dev/null 2>&1 || true
-    fi
-    
-    # Move or create the ticker file inside the test/ directory
-    if [ -f "$PROJECT_ROOT/${ticker}.ticker" ]; then
-        mv "$PROJECT_ROOT/${ticker}.ticker" "$SCRIPT_DIR/"
-    fi
-    
-    if [ ! -f "$SCRIPT_DIR/${ticker}.ticker" ]; then
+        "$FETCH_TICKER" "$ticker" max 1d > "$SCRIPT_DIR/${ticker}.ticker" 2>/dev/null || {
+            # Fallback if command fails, create empty file or touch
+            touch "$SCRIPT_DIR/${ticker}.ticker"
+        }
+    else
         touch "$SCRIPT_DIR/${ticker}.ticker"
     fi
 done
