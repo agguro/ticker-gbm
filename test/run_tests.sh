@@ -17,19 +17,21 @@ TICKER_GBM="$BIN_DIR/ticker-gbm"
 
 echo "=== RUNNING AUTOMATED TESTS ==="
 
-# 1. Build in debug mode (suppress make output for a clean terminal)
+# 1. Build in debug mode from project root
 cd "$PROJECT_ROOT"
 make clean >/dev/null 2>&1 || true
 make debug >/dev/null
 
-# 2. Fetch required tickers
+# 2. Fetch required tickers directly into the project root directory
 TICKERS=("O" "MAIN" "SPCX" "PSEC")
 echo "[*] Fetching ticker data..."
 for ticker in "${TICKERS[@]}"; do
     if [ -x "$FETCH_TICKER" ]; then
+        # Run fetch-ticker so it generates the .ticker file in the current working dir (PROJECT_ROOT)
         "$FETCH_TICKER" "$ticker" >/dev/null 2>&1 || true
     fi
-    # Fallback if fetch-ticker doesn't generate the file automatically yet
+    
+    # Fallback if the file still doesn't exist
     if [ ! -f "${ticker}.ticker" ]; then
         touch "${ticker}.ticker"
     fi
