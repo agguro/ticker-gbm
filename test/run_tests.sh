@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # File:        test/run_tests.sh
+# File:        test/run_tests.sh
 # Author:      agguro
 # Date:        August 20, 2026
 # Description: Automated test runner that fetches tickers and verifies exit codes.
@@ -22,37 +23,42 @@ cd "$PROJECT_ROOT"
 make clean >/dev/null 2>&1 || true
 make debug >/dev/null
 
-# 2. Fetch required tickers directly into the project root directory
+# 2. Fetch required tickers directly into the test/ directory
 TICKERS=("O" "MAIN" "SPCX" "PSEC")
 echo "[*] Fetching ticker data..."
 for ticker in "${TICKERS[@]}"; do
+    # Run fetch-ticker and ensure output ends up in test/
     if [ -x "$FETCH_TICKER" ]; then
-        # Run fetch-ticker so it generates the .ticker file in the current working dir (PROJECT_ROOT)
         "$FETCH_TICKER" "$ticker" >/dev/null 2>&1 || true
     fi
     
-    # Fallback if the file still doesn't exist
-    if [ ! -f "${ticker}.ticker" ]; then
-        touch "${ticker}.ticker"
+    # Move or create the ticker file inside the test/ directory
+    if [ -f "$PROJECT_ROOT/${ticker}.ticker" ]; then
+        mv "$PROJECT_ROOT/${ticker}.ticker" "$SCRIPT_DIR/"
+    fi
+    
+    if [ ! -f "$SCRIPT_DIR/${ticker}.ticker" ]; then
+        touch "$SCRIPT_DIR/${ticker}.ticker"
     fi
 done
 
-# 3. Define test commands
+# 3. Define test commands (referencing files inside test/)
 declare -a TESTS=(
-    "$TICKER_GBM PSEC.ticker 1.89 5000000 180d"
-    "$TICKER_GBM O.ticker 65 5000000 18d"
-    "$TICKER_GBM MAIN.ticker 60 5000000 20d"
-    "$TICKER_GBM SPCX.ticker 230 5000000 91d"
+    "$TICKER_GBM $SCRIPT_DIR/PSEC.ticker 1.89 5000000 180d"
+    "$TICKER_GBM $SCRIPT_DIR/O.ticker 65 5000000 18d"
+    "$TICKER_GBM $SCRIPT_DIR/MAIN.ticker 60 5000000 20d"
+    "$TICKER_GBM $SCRIPT_DIR/SPCX.ticker 230 5000000 91d"
 )
 
 # 4. Execute and strictly check exit codes
 FAILED=0
 for cmd in "${TESTS[@]}"; do
-    if eval "$cmd" >/dev/null 2>&1; then
+    if OUTPUT=$(eval "$cmd" 2>&1); then
         echo "[OK]   $cmd"
     else
         EXIT_CODE=$?
         echo "[FAIL] $cmd (exit code: $EXIT_CODE)"
+        echo "       Output: $OUTPUT"
         FAILED=$((FAILED + 1))
     fi
 done
